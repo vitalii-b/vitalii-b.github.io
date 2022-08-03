@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+	<meta charset="utf-8">
+	<title>optical flow</title>
+	<style>
+		html,
+		body {
+			height: 100%;
+		}
+
+		video {
+			height: 100%;
+			width: 100%;
+		}
+
+		canvas {
+			height: 100%;
+			width: 100%;
+		}
+	</style>
+</head>
+
+<body>
+	<video id="videoInput" class="full-screen hidden"></video>
+	<canvas id="canvasOutput" class="full-screen"></canvas>
+	<script type="text/javascript">
+
+		let Module = {
+			onRuntimeInitialized() {
+				// createVideo();
+				cvRun2()
+			}
+		};
+
+		function cvRun2() {
+
+			let vWidth = window.innerWidth;
+			let vHeight = window.innerHeight;
+			let video = document.getElementById("videoInput"); // video is the id of video tag
+			video.width = vWidth;
+			video.height = vHeight;
+			video.style.display = "none";
+
+			let targetSize = 200;
+			let rx1 = vWidth / 2 - targetSize / 2;
+			let ry1 = vHeight / 2 - targetSize / 2;
+			let canvas = document.getElementById("canvasOutput");
+			canvas.addEventListener('mousedown', function (e) {
+				const rect = canvas.getBoundingClientRect();
+				const x = e.clientX - rect.left;
+				const y = e.clientY - rect.top;
+				rx1 = Math.max(0, x - targetSize / 2);
+				ry1 = Math.max(0, y - targetSize / 2);
+			});
+			canvas.addEventListener('touchstart', function (e) {
+				const rect = canvas.getBoundingClientRect();
+				const touch = e.touches[0];
+				if (!touch)
+					return;
+				const x = touch.pageX - rect.left;
+				const y = touch.pageY - rect.top;
+				rx1 = Math.max(0, x - targetSize / 2);
+				ry1 = Math.max(0, y - targetSize / 2);
+			});
+
+			navigator.mediaDevices
+				.getUserMedia({
+					audio: false,
+					video: {
+						width: { ideal: vWidth },
+						height: { ideal: vHeight }
+					},
+				})
+				.then(function (stream) {
+					video.srcObject = stream;
+					video.play();
+					setTimeout(routine, 1000)
+
+				}).catch(function (err) {
+					console.log("An error occurred! " + err);
+				});;
+
+			function routine() {
+
+				let cap = new cv.VideoCapture(video);
+
+				// parameters for ShiTomasi corner detection
+				let [maxCorners, qualityLevel, minDistance, blockSize] = [60, 0.3, 7, 7];
+
+				// parameters for lucas kanade optical flow
+				let winSize = new cv.Size(24, 24);
+				let maxLevel = 3;
+				let criteria = new cv.TermCriteria(cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, 10, 0.03);
+
+				// create some random colors
+				let color = [];
+				for (let i = 0; i < maxCorners; i++) {
+					color.push(new cv.Scalar(parseInt(Math.random() * 255), parseInt(Math.random() * 255),
+						parseInt(Math.random() * 255), 255));
+				}
+
+				// take first frame and find corners in it
+				let oldFrame = new cv.Mat(video.height, video.width, cv.CV_8UC4);
+				cap.read(oldFrame);
+				let oldGray = new cv.Mat();
+				cv.cvtColor(oldFrame, oldGray, cv.COLOR_RGB2GRAY);
+				let p0 = new cv.Mat();
+				let none = new cv.Mat();
+				cv.goodFeaturesToTrack(oldGray, p0, maxCorners, qualityLevel, minDistance, none, blockSize);
+
+				// Create a mask image for drawing purposes
+				let zeroEle = new cv.Scalar(0, 0, 0, 255);
+				let mask = new cv.Mat(oldFrame.rows, oldFrame.cols, oldFrame.type(), zeroEle);
+
+				let frame = new cv.Mat(video.height, video.width, cv.CV_8UC4);
+				let frameGray = new cv.Mat();
+				let p1 = new cv.Mat();
+				let st = new cv.Mat();
+				let err = new cv.Mat();
+
+				const FPS = 30;
+				function processVideo() {
+					try {
+						let begin = Date.now();
+
+						// start processing.
+						cap.read(frame);
+						cv.cvtColor(frame, frameGray, cv.COLOR_RGBA2GRAY);
+
+						// calculate optical flow
+						let dx = 0;
+						let dy = 0;
+						let dd = 0;
+						let pyrLKOk = true;
+						try {
+							cv.calcOpticalFlowPyrLK(
+								oldGray, frameGray,
+								p0, p1,
+								st, err,
+								winSize, maxLevel, criteria
+							);
+						}
+						catch (e) {
+							pyrLKOk = false;
+							console.error(`calcOpticalFlowPyrLK failed`);
+						}
+
+						let goodNew = [];
+						let goodOld = [];
+						if (pyrLKOk) {
+
+							// select good points
+							for (let i = 0; i < st.rows; i++) {
+								if (st.data[i] === 1) {
+									goodNew.push(new cv.Point(p1.data32F[i * 2], p1.data32F[i * 2 + 1]));
+									goodOld.push(new cv.Point(p0.data32F[i * 2], p0.data32F[i * 2 + 1]));
+								}
+							}
+
+							// draw the tracks
+							for (let i = 0; i < goodNew.length; i++) {
+								//cv.line(mask, goodNew[i], goodOld[i], color[i], 2);
+								cv.circle(frame, goodNew[i], 10, color[i], -1);
+								if (goodOld[i].x >= rx1 && goodOld[i].x <= rx1 + targetSize
+									&& goodOld[i].y >= ry1 && goodOld[i].y <= ry1 + targetSize) {
+									dx += goodNew[i].x - goodOld[i].x;
+									dy += goodNew[i].y - goodOld[i].y
+									dd += 1;
+								}
+							}
+							cv.add(frame, mask, frame);
+						}
+
+						if (dd > 0) {
+							dx = dx / dd;
+							dy = dy / dd;
+							rx1 += dx;
+							ry1 += dy;
+						}
+
+						cv.rectangle(frame,
+							new cv.Point(rx1, ry1),
+							new cv.Point(rx1 + targetSize, ry1 + targetSize),
+							[dd === 0 ? 255 : 0, dd > 0 ? 255 : 0, 0, 255], // RGBA
+							5);
+
+						cv.imshow('canvasOutput', frame);
+
+						// now update the previous frame and previous points
+						frameGray.copyTo(oldGray);
+						p0.delete(); p0 = null;
+
+						if (pyrLKOk) {
+							p0 = new cv.Mat(goodNew.length, 1, cv.CV_32FC2);
+							for (let i = 0; i < goodNew.length; i++) {
+								p0.data32F[i * 2] = goodNew[i].x;
+								p0.data32F[i * 2 + 1] = goodNew[i].y;
+							}
+						}
+						else {
+							p0 = new cv.Mat();
+							cv.goodFeaturesToTrack(oldGray, p0, maxCorners, qualityLevel, minDistance, none, blockSize);
+						}
+
+						// schedule the next one.
+						let delay = 1000 / FPS - (Date.now() - begin);
+						setTimeout(processVideo, delay);
+					} catch (err) {
+						console.error(err);
+					}
+				};
+
+				// schedule the first one.
+				setTimeout(processVideo, 0);
+			}
+		}
+	</script>
+	<script async src="https://docs.opencv.org/4.6.0/opencv.js" type="text/javascript"></script>
+</body>
+
+</html>
