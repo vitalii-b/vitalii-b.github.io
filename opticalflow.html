@@ -70,9 +70,9 @@
 					audio: false,
 					video: {
 						width: { ideal: vWidth },
-						height: { ideal: vHeight }
+						height: { ideal: vHeight },
+						facingMode: 'environment'
 					},
-					facingMode: 'environment'
 				})
 				.then(function (stream) {
 					video.srcObject = stream;
