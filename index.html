@@ -57,8 +57,7 @@
 			canvas.addEventListener('touchstart', function (e) {
 				const rect = canvas.getBoundingClientRect();
 				const touch = e.touches[0];
-				if (!touch)
-					return;
+				if (!touch) return;
 				const x = touch.pageX - rect.left;
 				const y = touch.pageY - rect.top;
 				rx1 = Math.max(0, x - targetSize / 2);
