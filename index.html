@@ -3,7 +3,7 @@
 
 <head>
 	<meta charset="utf-8">
-	<title>OpticalFlow</title>
+	<title>optical flow</title>
 	<style>
 		html,
 		body {
@@ -87,12 +87,12 @@
 				let cap = new cv.VideoCapture(video);
 
 				// parameters for ShiTomasi corner detection
-				let [maxCorners, qualityLevel, minDistance, blockSize] = [60, 0.3, 7, 7];
+				let [maxCorners, qualityLevel, minDistance, blockSize] = [30, 0.2, 7, 7];
 
 				// parameters for lucas kanade optical flow
-				let winSize = new cv.Size(24, 24);
+				let winSize = new cv.Size(15, 15);
 				let maxLevel = 3;
-				let criteria = new cv.TermCriteria(cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, 10, 0.03);
+				let criteria = new cv.TermCriteria(cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, 40, 0.02);
 
 				// create some random colors
 				let color = [];
@@ -163,6 +163,7 @@
 							for (let i = 0; i < goodNew.length; i++) {
 								//cv.line(mask, goodNew[i], goodOld[i], color[i], 2);
 								cv.circle(frame, goodNew[i], 10, color[i], -1);
+								//cv.circle(frame, goodNew[i], 10, [0, 0, 255, 255], -1)
 								if (goodOld[i].x >= rx1 && goodOld[i].x <= rx1 + targetSize
 									&& goodOld[i].y >= ry1 && goodOld[i].y <= ry1 + targetSize) {
 									dx += goodNew[i].x - goodOld[i].x;
@@ -193,10 +194,17 @@
 						p0.delete(); p0 = null;
 
 						if (pyrLKOk) {
-							p0 = new cv.Mat(goodNew.length, 1, cv.CV_32FC2);
-							for (let i = 0; i < goodNew.length; i++) {
-								p0.data32F[i * 2] = goodNew[i].x;
-								p0.data32F[i * 2 + 1] = goodNew[i].y;
+							let p0tmp = new cv.Mat();
+							cv.goodFeaturesToTrack(oldGray, p0tmp, maxCorners, qualityLevel, minDistance, none, blockSize);
+							if (p0tmp.rows >= goodNew.length * 1.5)
+								p0 = p0tmp;
+							else {
+								p0tmp.delete();
+								p0 = new cv.Mat(goodNew.length, 1, cv.CV_32FC2);
+								for (let i = 0; i < goodNew.length; i++) {
+									p0.data32F[i * 2] = goodNew[i].x;
+									p0.data32F[i * 2 + 1] = goodNew[i].y;
+								}
 							}
 						}
 						else {
