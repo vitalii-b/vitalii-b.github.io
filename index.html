@@ -19,211 +19,280 @@
 			height: 100%;
 			width: 100%;
 		}
+
+		#statusText {
+			position: absolute;
+			top: 24px;
+			left: 24px;
+			color: white;
+			font-weight: bold;
+		}
+
+		#featureAlgSelect {
+			position: absolute;
+			top: 24px;
+			right: 24px;
+		}
 	</style>
 </head>
 
 <body>
 	<video id="videoInput" class="full-screen hidden" playsinline=true></video>
 	<canvas id="canvasOutput" class="full-screen"></canvas>
+	<div id="statusText"></div>
+	<select id="featureAlgSelect">
+	</select>
 	<script type="text/javascript">
+
+		const Version = "v1.0";
+		const FeatureAlgORB = "ORB";
+		const FeatureAlgShiTomasi = "ShiTomasi";
+
+		let maxFeatures = 500;
+		let poi = { x: 0, y: 0, size: 200 };
+		let framesPerSec = 0;
+		let statusErr;
+
+		let featureAlgMap = {};
+		featureAlgMap[FeatureAlgShiTomasi] = (function () {
+			let none;
+			let qualityLevel = 0.2;
+			let minDistance = 7;
+			let blockSize = 7;
+			return {
+				id: FeatureAlgShiTomasi,
+				get: function (frame, maxFeatures) {
+					if (!none) none = new cv.Mat();
+					let points = new cv.Mat();
+					cv.goodFeaturesToTrack(frame, points, maxFeatures, qualityLevel, minDistance, none, blockSize);
+					return points;
+				}
+			}
+		})();
+		featureAlgMap[FeatureAlgORB] = (function () {
+			return {
+				id: FeatureAlgORB,
+				get: function (frame, maxFeatures) {
+					let orb = new cv.ORB(maxFeatures);
+					let keyPoints = new cv.KeyPointVector();
+					orb.detect(frame, keyPoints);
+					let points = new cv.Mat(maxFeatures, 1, cv.CV_32FC2);
+					for (let i = 0; i < keyPoints.size(); i++) {
+						let pt = keyPoints.get(i).pt;
+						points.floatPtr(i)[0] = pt.x;
+						points.floatPtr(i)[1] = pt.y;
+					}
+					return points;
+				}
+			}
+		})();
+
+		let statusText = document.getElementById("statusText");
+		setInterval(function () {
+			if (statusErr) {
+				statusText.style.color = "black";
+				statusText.innerText = Version + " | " + statusErr;
+				return;
+			}
+			statusText.style.color = "black";
+			statusText.innerText = Version + " | " + framesPerSec + " fps";
+		}, 1000);
+
+		let featureAlgSelect = document.getElementById("featureAlgSelect");
+		for (let id in featureAlgMap) {
+			var opt = document.createElement("option");
+			opt.value = id;
+			opt.innerHTML = id;
+			featureAlgSelect.appendChild(opt);
+		}
+		featureAlgSelect.value = FeatureAlgShiTomasi;
+
+		let video = document.getElementById("videoInput");
+		video.width = window.innerWidth;
+		video.height = window.innerHeight;
+		video.style.display = "none";
+
+		let canvas = document.getElementById("canvasOutput");
+		canvas.addEventListener('mousedown', function (e) {
+			const rect = canvas.getBoundingClientRect();
+			const x = e.clientX - rect.left;
+			const y = e.clientY - rect.top;
+			poi.x = Math.max(0, x - poi.size / 2);
+			poi.y = Math.max(0, y - poi.size / 2);
+		});
+		canvas.addEventListener('touchstart', function (e) {
+			const rect = canvas.getBoundingClientRect();
+			const touch = e.touches[0];
+			if (!touch)
+				return;
+			const x = touch.pageX - rect.left;
+			const y = touch.pageY - rect.top;
+			poi.x = Math.max(0, x - poi.size / 2);
+			poi.y = Math.max(0, y - poi.size / 2);
+		});
 
 		let Module = {
 			onRuntimeInitialized() {
-				// createVideo();
-				cvRun2()
+				navigator.mediaDevices
+					.getUserMedia({
+						audio: false,
+						video: {
+							width: { ideal: video.width },
+							height: { ideal: video.height },
+							facingMode: 'environment'
+						},
+					})
+					.then(function (stream) {
+						// init stream, play
+						video.srcObject = stream;
+						video.play();
+						// center POI
+						poi.x = video.width / 2 - poi.size / 2;
+						poi.y = video.height / 2 - poi.size / 2;
+						// run cv
+						cvRun();
+
+					}).catch(function (err) {
+						if (err.message)
+							statusText = err.message;
+					});
 			}
 		};
 
-		function cvRun2() {
+		function cvRun() {
 
-			let vWidth = window.innerWidth;
-			let vHeight = window.innerHeight;
-			let video = document.getElementById("videoInput"); // video is the id of video tag
-			video.width = vWidth;
-			video.height = vHeight;
-			video.style.display = "none";
+			let cap = new cv.VideoCapture(video);
+			let featureAlg = featureAlgMap[featureAlgSelect.value];
 
-			let targetSize = 200;
-			let rx1 = vWidth / 2 - targetSize / 2;
-			let ry1 = vHeight / 2 - targetSize / 2;
-			let canvas = document.getElementById("canvasOutput");
-			canvas.addEventListener('mousedown', function (e) {
-				const rect = canvas.getBoundingClientRect();
-				const x = e.clientX - rect.left;
-				const y = e.clientY - rect.top;
-				rx1 = Math.max(0, x - targetSize / 2);
-				ry1 = Math.max(0, y - targetSize / 2);
-			});
-			canvas.addEventListener('touchstart', function (e) {
-				const rect = canvas.getBoundingClientRect();
-				const touch = e.touches[0];
-				if (!touch)
-					return;
-				const x = touch.pageX - rect.left;
-				const y = touch.pageY - rect.top;
-				rx1 = Math.max(0, x - targetSize / 2);
-				ry1 = Math.max(0, y - targetSize / 2);
-			});
+			// lucas kanade params
+			let winSize = new cv.Size(15, 15);
+			let maxLevel = 3;
+			let criteria = new cv.TermCriteria(cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, 40, 0.02);
 
-			navigator.mediaDevices
-				.getUserMedia({
-					audio: false,
-					video: {
-						width: { ideal: vWidth },
-						height: { ideal: vHeight },
-						facingMode: 'environment'
-					},
-				})
-				.then(function (stream) {
-					video.srcObject = stream;
-					video.play();
-					setTimeout(routine, 1000)
+			// random colors
+			let color = [];
+			let colorRed = [255, 0, 0, 255]; // RGBA
+			let colorGreen = [0, 255, 0, 255]; // RGBA
+			for (let i = 0; i < maxFeatures; i++) {
+				color.push(new cv.Scalar(parseInt(Math.random() * 255), parseInt(Math.random() * 255),
+					parseInt(Math.random() * 255), 255));
+			}
 
-				}).catch(function (err) {
-					console.log("An error occurred! " + err);
-				});;
+			// take first frame and find corners in it
+			let oldFrame = new cv.Mat(video.height, video.width, cv.CV_8UC4);
+			cap.read(oldFrame);
+			let oldGray = new cv.Mat();
+			cv.cvtColor(oldFrame, oldGray, cv.COLOR_RGB2GRAY);
 
-			function routine() {
+			// get initial features
+			let p0 = featureAlg.get(oldGray, maxFeatures);
 
-				let cap = new cv.VideoCapture(video);
+			let frame = new cv.Mat(video.height, video.width, cv.CV_8UC4);
+			let frameGray = new cv.Mat();
+			let p1 = new cv.Mat();
+			let st = new cv.Mat();
+			let err = new cv.Mat();
 
-				// parameters for ShiTomasi corner detection
-				let [maxCorners, qualityLevel, minDistance, blockSize] = [30, 0.2, 7, 7];
+			let frameCnt = 0;
+			let frameCntStart = 0;
+			let frameTsStart = Date.now();
+			const FRAME_KEY_POINTS = 60;
+			function processVideo() {
 
-				// parameters for lucas kanade optical flow
-				let winSize = new cv.Size(15, 15);
-				let maxLevel = 3;
-				let criteria = new cv.TermCriteria(cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, 40, 0.02);
-
-				// create some random colors
-				let color = [];
-				for (let i = 0; i < maxCorners; i++) {
-					color.push(new cv.Scalar(parseInt(Math.random() * 255), parseInt(Math.random() * 255),
-						parseInt(Math.random() * 255), 255));
+				// FPS estimation
+				frameCnt++;
+				if (frameCnt >= Number.MAX_SAFE_INTEGER)
+					frameCnt = 1;
+				if (Date.now() - frameTsStart >= 1000) {
+					framesPerSec = Math.round(1000 / Math.max(1, (frameCnt - frameCntStart)));
+					frameTsStart = Date.now();
+					frameCntStart = frameCnt;
 				}
 
-				// take first frame and find corners in it
-				let oldFrame = new cv.Mat(video.height, video.width, cv.CV_8UC4);
-				cap.read(oldFrame);
-				let oldGray = new cv.Mat();
-				cv.cvtColor(oldFrame, oldGray, cv.COLOR_RGB2GRAY);
-				let p0 = new cv.Mat();
-				let none = new cv.Mat();
-				cv.goodFeaturesToTrack(oldGray, p0, maxCorners, qualityLevel, minDistance, none, blockSize);
+				// start processing
+				cap.read(frame);
+				cv.cvtColor(frame, frameGray, cv.COLOR_RGBA2GRAY);
 
-				// Create a mask image for drawing purposes
-				let zeroEle = new cv.Scalar(0, 0, 0, 255);
-				let mask = new cv.Mat(oldFrame.rows, oldFrame.cols, oldFrame.type(), zeroEle);
+				// calculate optical flow
+				let dx = 0;
+				let dy = 0;
+				let dd = 0;
+				let pyrLKOk = true;
+				try {
+					cv.calcOpticalFlowPyrLK(
+						oldGray, frameGray,
+						p0, p1,
+						st, err,
+						winSize, maxLevel, criteria
+					);
+				}
+				catch (e) {
+					pyrLKOk = false;
+					console.error(`calcOpticalFlowPyrLK failed`);
+				}
 
-				let frame = new cv.Mat(video.height, video.width, cv.CV_8UC4);
-				let frameGray = new cv.Mat();
-				let p1 = new cv.Mat();
-				let st = new cv.Mat();
-				let err = new cv.Mat();
-
-				const FPS = 30;
-				function processVideo() {
-					try {
-						let begin = Date.now();
-
-						// start processing.
-						cap.read(frame);
-						cv.cvtColor(frame, frameGray, cv.COLOR_RGBA2GRAY);
-
-						// calculate optical flow
-						let dx = 0;
-						let dy = 0;
-						let dd = 0;
-						let pyrLKOk = true;
-						try {
-							cv.calcOpticalFlowPyrLK(
-								oldGray, frameGray,
-								p0, p1,
-								st, err,
-								winSize, maxLevel, criteria
-							);
+				let goodNew = [];
+				let goodOld = [];
+				if (pyrLKOk) {
+					// select good points
+					for (let i = 0; i < st.rows; i++) {
+						if (st.data[i] === 1) {
+							goodNew.push(new cv.Point(p1.data32F[i * 2], p1.data32F[i * 2 + 1]));
+							goodOld.push(new cv.Point(p0.data32F[i * 2], p0.data32F[i * 2 + 1]));
 						}
-						catch (e) {
-							pyrLKOk = false;
-							console.error(`calcOpticalFlowPyrLK failed`);
-						}
-
-						let goodNew = [];
-						let goodOld = [];
-						if (pyrLKOk) {
-
-							// select good points
-							for (let i = 0; i < st.rows; i++) {
-								if (st.data[i] === 1) {
-									goodNew.push(new cv.Point(p1.data32F[i * 2], p1.data32F[i * 2 + 1]));
-									goodOld.push(new cv.Point(p0.data32F[i * 2], p0.data32F[i * 2 + 1]));
-								}
-							}
-
-							// draw the tracks
-							for (let i = 0; i < goodNew.length; i++) {
-								//cv.line(mask, goodNew[i], goodOld[i], color[i], 2);
-								cv.circle(frame, goodNew[i], 10, color[i], -1);
-								//cv.circle(frame, goodNew[i], 10, [0, 0, 255, 255], -1)
-								if (goodOld[i].x >= rx1 && goodOld[i].x <= rx1 + targetSize
-									&& goodOld[i].y >= ry1 && goodOld[i].y <= ry1 + targetSize) {
-									dx += goodNew[i].x - goodOld[i].x;
-									dy += goodNew[i].y - goodOld[i].y
-									dd += 1;
-								}
-							}
-							cv.add(frame, mask, frame);
-						}
-
-						if (dd > 0) {
-							dx = dx / dd;
-							dy = dy / dd;
-							rx1 += dx;
-							ry1 += dy;
-						}
-
-						cv.rectangle(frame,
-							new cv.Point(rx1, ry1),
-							new cv.Point(rx1 + targetSize, ry1 + targetSize),
-							[dd === 0 ? 255 : 0, dd > 0 ? 255 : 0, 0, 255], // RGBA
-							5);
-
-						cv.imshow('canvasOutput', frame);
-
-						// now update the previous frame and previous points
-						frameGray.copyTo(oldGray);
-						p0.delete(); p0 = null;
-
-						if (pyrLKOk) {
-							let p0tmp = new cv.Mat();
-							cv.goodFeaturesToTrack(oldGray, p0tmp, maxCorners, qualityLevel, minDistance, none, blockSize);
-							if (p0tmp.rows >= goodNew.length * 1.5)
-								p0 = p0tmp;
-							else {
-								p0tmp.delete();
-								p0 = new cv.Mat(goodNew.length, 1, cv.CV_32FC2);
-								for (let i = 0; i < goodNew.length; i++) {
-									p0.data32F[i * 2] = goodNew[i].x;
-									p0.data32F[i * 2 + 1] = goodNew[i].y;
-								}
-							}
-						}
-						else {
-							p0 = new cv.Mat();
-							cv.goodFeaturesToTrack(oldGray, p0, maxCorners, qualityLevel, minDistance, none, blockSize);
-						}
-
-						// schedule the next one.
-						let delay = 1000 / FPS - (Date.now() - begin);
-						setTimeout(processVideo, delay);
-					} catch (err) {
-						console.error(err);
 					}
-				};
+					// draw key points
+					for (let i = 0; i < goodNew.length; i++) {
+						cv.circle(frame, goodNew[i], 4, color[i], -1);
+						if (goodOld[i].x >= poi.x && goodOld[i].x <= poi.x + poi.size
+							&& goodOld[i].y >= poi.y && goodOld[i].y <= poi.y + poi.size) {
+							dx += goodNew[i].x - goodOld[i].x;
+							dy += goodNew[i].y - goodOld[i].y
+							dd += 1;
+						}
+					}
+				}
 
-				// schedule the first one.
-				setTimeout(processVideo, 0);
-			}
+				if (dd > 0) {
+					dx = dx / dd;
+					dy = dy / dd;
+					poi.x += dx;
+					poi.x += dy;
+				}
+
+				cv.rectangle(frame,
+					new cv.Point(poi.x, poi.y),
+					new cv.Point(poi.x + poi.size, poi.y + poi.size),
+					[dd === 0 ? 255 : 0, dd > 0 ? 255 : 0, 0, 255], // RGBA
+					5);
+
+				cv.imshow('canvasOutput', frame);
+
+				// update previous frame
+				frameGray.copyTo(oldGray);
+
+				// update previous points
+				p0.delete(); p0 = null;
+				const sameAlg = featureAlg.id === featureAlgSelect.value;
+				if (!pyrLKOk || !sameAlg) {
+					if (!sameAlg)
+						featureAlg = featureAlgMap[featureAlgSelect.value];
+					p0 = featureAlg.get(oldGray, maxFeatures);
+				}
+				else {
+					p0 = new cv.Mat(maxFeatures, 1, cv.CV_32FC2);
+					for (let i = 0; i < goodNew.length; i++) {
+						p0.data32F[i * 2] = goodNew[i].x;
+						p0.data32F[i * 2 + 1] = goodNew[i].y;
+					}
+				}
+
+				// schedule next frame
+				requestAnimationFrame(processVideo);
+			};
+
+			// schedule the first one.
+			setTimeout(processVideo, 0);
 		}
 	</script>
 	<script async src="https://docs.opencv.org/4.6.0/opencv.js" type="text/javascript"></script>
