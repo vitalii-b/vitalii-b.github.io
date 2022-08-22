@@ -3,29 +3,50 @@
 
 <head>
 	<meta charset="utf-8">
-	<title>optical flow</title>
+	<title>OpenCV test</title>
 	<style>
 		html,
 		body {
+			width: 100%;
+			height: 100%;
+		}
+
+		input {
+			display: none;
+		}
+
+		img {
+			display: none;
+			position: absolute;
+			display: none;
+			width: 100%;
 			height: 100%;
 		}
 
 		video {
+			display: none;
+			position: absolute;
 			height: 100%;
 			width: 100%;
 		}
 
 		canvas {
+			position: absolute;
 			height: 100%;
 			width: 100%;
 		}
 
 		#statusText {
 			position: absolute;
+			bottom: 24px;
+			right: 24px;
+			font-weight: bold;
+		}
+
+		#demoBar {
+			position: absolute;
 			top: 24px;
 			left: 24px;
-			color: white;
-			font-weight: bold;
 		}
 
 		#featureAlgSelect {
@@ -37,17 +58,26 @@
 </head>
 
 <body>
-	<video id="videoInput" class="full-screen hidden" playsinline=true></video>
-	<canvas id="canvasOutput" class="full-screen"></canvas>
+	<img id="imageInput" alt="No Image" />
+	<video id="videoInput" playsinline=true></video>
+	<canvas id="canvasOutput"></canvas>
 	<div id="statusText"></div>
-	<select id="featureAlgSelect">
-	</select>
+	<div id="demoBar">
+		<select id="demoSelect"></select>
+		<input type="file" id="imgFileInput" name="file" />
+		<input type="file" id="videoFileInput" name="file" />
+	</div>
+	<select id="featureAlgSelect"></select>
 	<script type="text/javascript">
 
-		const Version = "v1.0";
+		const Version = "v2";
 		const FeatureAlgORB = "ORB";
 		const FeatureAlgShiTomasi = "ShiTomasi";
+		const DemoCamera = "Camera Demo";
+		const DemoVideo = "Video Demo";
+		const DemoImage = "Image Demo";
 
+		let cvRunId = 0;
 		let maxFeatures = 500;
 		let poi = { x: 0, y: 0, size: 200 };
 		let framesPerSec = 0;
@@ -94,9 +124,18 @@
 				statusText.innerText = Version + " | " + statusErr;
 				return;
 			}
-			statusText.style.color = "black";
+			// statusText.style.color = "black";
 			statusText.innerText = Version + " | " + framesPerSec + " fps";
 		}, 1000);
+
+		let demoSelect = document.getElementById("demoSelect");
+		for (let id of [DemoImage, DemoVideo, DemoCamera]) {
+			var opt = document.createElement("option");
+			opt.value = id;
+			opt.innerHTML = id;
+			demoSelect.appendChild(opt);
+		}
+		demoSelect.onchange = onDemoChanged;
 
 		let featureAlgSelect = document.getElementById("featureAlgSelect");
 		for (let id in featureAlgMap) {
@@ -107,10 +146,20 @@
 		}
 		featureAlgSelect.value = FeatureAlgShiTomasi;
 
+		let image = document.getElementById("imageInput");
+		image.onload = function() {
+			if (demoSelect.value === DemoImage)
+				cvRun(false);
+		};
+
 		let video = document.getElementById("videoInput");
-		video.width = window.innerWidth;
-		video.height = window.innerHeight;
 		video.style.display = "none";
+
+		let imgFileInput = document.getElementById("imgFileInput");
+		imgFileInput.addEventListener("change", onDemoChanged, false);
+
+		let videoFileInput = document.getElementById("videoFileInput");
+		videoFileInput.addEventListener("change", onDemoChanged, false);
 
 		let canvas = document.getElementById("canvasOutput");
 		canvas.addEventListener('mousedown', function (e) {
@@ -133,6 +182,35 @@
 
 		let Module = {
 			onRuntimeInitialized() {
+				onDemoChanged();
+			}
+		};
+
+		function onDemoChanged() {
+	
+			const demoId = demoSelect.value;
+
+			cvRunId++;
+			if (video.srcObject) {
+				video.srcObject.getTracks().forEach(track => {
+					track.stop();
+					video.srcObject.removeTrack(track);
+				});
+				video.srcObject = null;
+				video.pause();
+				video.removeAttribute('src');
+				video.load();
+			}
+
+			for (let element of [video, canvas, image]) {
+				element.width = window.innerWidth;
+				element.height = window.innerHeight;
+			}
+			for (let element of [imgFileInput, videoFileInput]) {
+				element.style.display = "none";
+			}
+
+			if (demoId === DemoCamera) {
 				navigator.mediaDevices
 					.getUserMedia({
 						audio: false,
@@ -140,28 +218,51 @@
 							width: { ideal: video.width },
 							height: { ideal: video.height },
 							facingMode: 'environment'
-						},
+						}
 					})
 					.then(function (stream) {
-						// init stream, play
 						video.srcObject = stream;
 						video.play();
-						// center POI
-						poi.x = video.width / 2 - poi.size / 2;
-						poi.y = video.height / 2 - poi.size / 2;
-						// run cv
-						cvRun();
-
+						cvRun(true);
 					}).catch(function (err) {
 						if (err.message)
 							statusText = err.message;
 					});
+				return;
 			}
-		};
 
-		function cvRun() {
+			if (demoId === DemoImage) {
+				imgFileInput.style.display = "inline";
+				if (imgFileInput.files && imgFileInput.files.length) {
+					image.src = URL.createObjectURL(imgFileInput.files[0]);
+					cvRun(false);
+				}
+				return;
+			}
 
-			let cap = new cv.VideoCapture(video);
+			if (demoId === DemoVideo) {
+				videoFileInput.style.display = "inline";
+				if (videoFileInput.files && videoFileInput.files.length) {
+					video.src = URL.createObjectURL(videoFileInput.files[0]);
+					video.load();
+					video.play();
+					cvRun(true);
+				}
+			}
+		}
+
+		function cvRun(isVideo) {
+
+			cvRunId++;
+			const currentRunId = cvRunId;
+			const frameWidth = window.innerWidth;
+			const frameHeight = window.innerHeight;
+
+			// center POI
+			poi.x = canvas.width / 2 - poi.size / 2;
+			poi.y = canvas.height / 2 - poi.size / 2;
+
+			let cap = isVideo ? new cv.VideoCapture(video) : undefined;
 			let featureAlg = featureAlgMap[featureAlgSelect.value];
 
 			// lucas kanade params
@@ -179,15 +280,21 @@
 			}
 
 			// take first frame and find corners in it
-			let oldFrame = new cv.Mat(video.height, video.width, cv.CV_8UC4);
-			cap.read(oldFrame);
+			let oldFrame = new cv.Mat(frameHeight, frameWidth, cv.CV_8UC4);
+			if (isVideo)
+				cap.read(oldFrame);
+			else {
+				let tmpMat = cv.imread(image);
+				tmpMat.copyTo(oldFrame);
+				tmpMat.delete();
+			}
 			let oldGray = new cv.Mat();
 			cv.cvtColor(oldFrame, oldGray, cv.COLOR_RGB2GRAY);
 
 			// get initial features
 			let p0 = featureAlg.get(oldGray, maxFeatures);
 
-			let frame = new cv.Mat(video.height, video.width, cv.CV_8UC4);
+			let frame = new cv.Mat(frameHeight, frameWidth, cv.CV_8UC4);
 			let frameGray = new cv.Mat();
 			let p1 = new cv.Mat();
 			let st = new cv.Mat();
@@ -198,6 +305,21 @@
 			let frameTsStart = Date.now();
 			const FRAME_KEY_POINTS = 60;
 			function processVideo() {
+
+				if (currentRunId !== cvRunId) {
+					// clean resources
+					if (oldFrame) oldFrame.delete();
+					if (oldGray) oldGray.delete();
+					if (frame) frame.delete();
+					if (frameGray) frameGray.delete();
+					// fill with white
+					if (canvas && canvas.width && canvas.height) {
+						let ctx = canvas.getContext("2d");
+						ctx.fillStyle = "white";
+						ctx.fillRect(0, 0, canvas.width, canvas.height);
+					}
+					return;
+				}
 
 				// FPS estimation
 				frameCnt++;
@@ -210,7 +332,13 @@
 				}
 
 				// start processing
-				cap.read(frame);
+				if (isVideo)
+					cap.read(frame);
+				else {
+					let tmpMat = cv.imread(image);
+					tmpMat.copyTo(frame);
+					tmpMat.delete();
+				}
 				cv.cvtColor(frame, frameGray, cv.COLOR_RGBA2GRAY);
 
 				// calculate optical flow
