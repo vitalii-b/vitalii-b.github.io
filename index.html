@@ -153,6 +153,10 @@
 		};
 
 		let video = document.getElementById("videoInput");
+		video.addEventListener("loadeddata", function() {
+			if (demoSelect.value === DemoVideo || demoSelect.value === DemoCamera)
+				cvRun(true);
+		}, false);
 		video.style.display = "none";
 
 		let imgFileInput = document.getElementById("imgFileInput");
@@ -223,7 +227,6 @@
 					.then(function (stream) {
 						video.srcObject = stream;
 						video.play();
-						cvRun(true);
 					}).catch(function (err) {
 						if (err.message)
 							statusText = err.message;
@@ -235,7 +238,6 @@
 				imgFileInput.style.display = "inline";
 				if (imgFileInput.files && imgFileInput.files.length) {
 					image.src = URL.createObjectURL(imgFileInput.files[0]);
-					cvRun(false);
 				}
 				return;
 			}
@@ -246,7 +248,6 @@
 					video.src = URL.createObjectURL(videoFileInput.files[0]);
 					video.load();
 					video.play();
-					cvRun(true);
 				}
 			}
 		}
