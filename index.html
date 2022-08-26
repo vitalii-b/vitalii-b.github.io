@@ -78,8 +78,10 @@
 		const DemoImage = "Image Demo";
 
 		let cvRunId = 0;
-		let maxFeatures = 500;
-		let poi = { x: 0, y: 0, size: 200 };
+		let drawFeatures = true;
+		let maxFeatures = 100;
+		let poiSize = 150;
+		let poi = { v: 0, x: 0, y: 0, size: poiSize };
 		let framesPerSec = 0;
 		let statusErr;
 
@@ -129,7 +131,7 @@
 		}, 1000);
 
 		let demoSelect = document.getElementById("demoSelect");
-		for (let id of [DemoImage, DemoVideo, DemoCamera]) {
+		for (let id of [DemoVideo, DemoCamera, DemoImage]) {
 			var opt = document.createElement("option");
 			opt.value = id;
 			opt.innerHTML = id;
@@ -171,8 +173,10 @@
 			const rect = canvas.getBoundingClientRect();
 			const x = e.clientX - rect.left;
 			const y = e.clientY - rect.top;
+			poi.v++;
 			poi.x = Math.max(0, x - poi.size / 2);
 			poi.y = Math.max(0, y - poi.size / 2);
+			poi.size = poiSize;
 		});
 		canvas.addEventListener('touchstart', function (e) {
 			const rect = canvas.getBoundingClientRect();
@@ -181,9 +185,12 @@
 				return;
 			const x = touch.pageX - rect.left;
 			const y = touch.pageY - rect.top;
+			poi.v++;
 			poi.x = Math.max(0, x - poi.size / 2);
 			poi.y = Math.max(0, y - poi.size / 2);
+			poi.size = poiSize;
 		});
+
 
 		let Module = {
 			onRuntimeInitialized() {
@@ -263,6 +270,7 @@
 			// center POI
 			poi.x = canvas.width / 2 - poi.size / 2;
 			poi.y = canvas.height / 2 - poi.size / 2;
+			poi.size = poiSize;
 
 			let cap = isVideo ? new cv.VideoCapture(video) : undefined;
 			let featureAlg = featureAlgMap[featureAlgSelect.value];
@@ -302,6 +310,10 @@
 			let st = new cv.Mat();
 			let err = new cv.Mat();
 
+			let mask = undefined;
+			let poiV = poi.v;
+			let videoTs = video.currentTime;
+
 			let frameCnt = 0;
 			let frameCntStart = 0;
 			let frameTsStart = Date.now();
@@ -314,6 +326,7 @@
 					if (oldGray) oldGray.delete();
 					if (frame) frame.delete();
 					if (frameGray) frameGray.delete();
+					if (mask) mask.delete();
 					// fill with white
 					if (canvas && canvas.width && canvas.height) {
 						let ctx = canvas.getContext("2d");
@@ -344,9 +357,6 @@
 				cv.cvtColor(frame, frameGray, cv.COLOR_RGBA2GRAY);
 
 				// calculate optical flow
-				let dx = 0;
-				let dy = 0;
-				let dd = 0;
 				let pyrLKOk = true;
 				try {
 					cv.calcOpticalFlowPyrLK(
@@ -361,61 +371,114 @@
 					console.error(`calcOpticalFlowPyrLK failed`);
 				}
 
-				let goodNew = [];
-				let goodOld = [];
+				// check video end, poi change
+				let resetLK = !pyrLKOk;
+				if (isVideo) {
+					if (video.currentTime < videoTs)
+						resetLK = true;
+					videoTs = video.currentTime;
+				}
+				if (poiV !== poi.v) {
+					resetLK = true;
+					poiV = poi.v;
+				}
+				if (resetLK) {
+					pyrLKOk = false;
+					if (mask) mask.delete();
+					mask = null;
+				}
+
+				let goodFeatures = 0;
 				if (pyrLKOk) {
-					// select good points
+					// draw key points
 					for (let i = 0; i < st.rows; i++) {
 						if (st.data[i] === 1) {
-							goodNew.push(new cv.Point(p1.data32F[i * 2], p1.data32F[i * 2 + 1]));
-							goodOld.push(new cv.Point(p0.data32F[i * 2], p0.data32F[i * 2 + 1]));
-						}
-					}
-					// draw key points
-					for (let i = 0; i < goodNew.length; i++) {
-						cv.circle(frame, goodNew[i], 4, color[i], -1);
-						if (goodOld[i].x >= poi.x && goodOld[i].x <= poi.x + poi.size
-							&& goodOld[i].y >= poi.y && goodOld[i].y <= poi.y + poi.size) {
-							dx += goodNew[i].x - goodOld[i].x;
-							dy += goodNew[i].y - goodOld[i].y
-							dd += 1;
+							goodFeatures++;
+							if (drawFeatures) {
+								let pt = new cv.Point(p1.data32F[i * 2], p1.data32F[i * 2 + 1]);
+								cv.circle(frame, pt, 3, color[i], -1);
+							}
 						}
 					}
 				}
 
-				if (dd > 0) {
-					dx = dx / dd;
-					dy = dy / dd;
-					poi.x += dx;
-					poi.x += dy;
-				}
+				// calc affine transform
+				if (pyrLKOk) {
+					let src = new cv.Mat(goodFeatures, 1, cv.CV_32FC2);
+					let dst = new cv.Mat(goodFeatures, 1, cv.CV_32FC2); 
+					for (let i = 0, j = 0; i < st.rows; i++) {
+						if (st.data[i] === 1) {
+							src.data32F[j * 2] = p0.data32F[i * 2];
+							src.data32F[j * 2 + 1] = p0.data32F[i * 2 + 1];
+							dst.data32F[j * 2] = p1.data32F[i * 2];
+							dst.data32F[j * 2 + 1] = p1.data32F[i * 2 + 1];
+							j++;
+						}
+					}
+					let affine;
+					try {
+						affine = cv.estimateAffine2D(src, dst);
+					}
+					catch (e) {
+						console.error(`estimateAffine2D failed`);
+					}
+					src.delete(); dst.delete();
 
-				cv.rectangle(frame,
-					new cv.Point(poi.x, poi.y),
-					new cv.Point(poi.x + poi.size, poi.y + poi.size),
-					[dd === 0 ? 255 : 0, dd > 0 ? 255 : 0, 0, 255], // RGBA
-					5);
+					if (affine) {
+						// // opt 1
+						// let a = affine.data64F[0];
+						// let b = affine.data64F[1];
+						// let tx = affine.data64F[2];
+						// let c = affine.data64F[3];
+						// let d = affine.data64F[4];
+						// let ty = affine.data64F[5];
+						// let sx = Math.sign(a) * Math.sqrt(a*a + b*b);
+						// let sy = Math.sign(d) * Math.sqrt(c*c + d*d);
+						// let rotation = Math.atan2(c, d);
+						// poi.x = (poi.x + tx) * sx;
+						// poi.y = (poi.y + ty) * sy;
+						// poi.size = poi.size * ((sx + sy) / 2);
+						// cv.rectangle(frame,
+						// 	new cv.Point(poi.x, poi.y),
+						// 	new cv.Point(poi.x + poi.size, poi.y + poi.size),
+						// 	[255, 255, 0, 255], // RGBA
+						// 	3);
+
+						// opt 2
+						if (!mask) {
+							let zeros = new cv.Scalar(0, 0, 0, 255);
+							mask = new cv.Mat(frame.rows, frame.cols, frame.type(), zeros);
+							cv.rectangle(mask,
+								new cv.Point(poi.x, poi.y),
+								new cv.Point(poi.x + poi.size, poi.y + poi.size),
+								[0, 255, 0, 255], // RGBA
+								5);
+						}
+						else {
+							try {
+								//cv.transform(mask, mask, affine, mask.size());
+								cv.warpAffine(mask, mask, affine, mask.size());
+							}
+							catch (e) {
+								console.log(`warpAffine failed`);
+							}
+						}
+						cv.add(frame, mask, frame);
+
+						affine.delete();
+					}
+					else {
+						if (mask) mask.delete();
+					}
+				}
 
 				cv.imshow('canvasOutput', frame);
 
 				// update previous frame
 				frameGray.copyTo(oldGray);
 
-				// update previous points
-				p0.delete(); p0 = null;
-				const sameAlg = featureAlg.id === featureAlgSelect.value;
-				if (!pyrLKOk || !sameAlg) {
-					if (!sameAlg)
-						featureAlg = featureAlgMap[featureAlgSelect.value];
-					p0 = featureAlg.get(oldGray, maxFeatures);
-				}
-				else {
-					p0 = new cv.Mat(maxFeatures, 1, cv.CV_32FC2);
-					for (let i = 0; i < goodNew.length; i++) {
-						p0.data32F[i * 2] = goodNew[i].x;
-						p0.data32F[i * 2 + 1] = goodNew[i].y;
-					}
-				}
+				p0.delete();
+				p0 = featureAlg.get(oldGray, maxFeatures);
 
 				// schedule next frame
 				requestAnimationFrame(processVideo);
